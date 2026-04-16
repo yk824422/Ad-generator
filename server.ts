@@ -25,20 +25,23 @@ app.post("/api/scrape", async (req, res) => {
     
     const response = await axios.get(url, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Language": "en-IN,en;q=0.9",
         "Cache-Control": "no-cache",
         "Pragma": "no-cache",
+        "Referer": "https://www.google.com/",
       },
-      timeout: 9000, // Stay under Vercel's 10s limit
+      timeout: 9000, 
       maxRedirects: 5,
-      validateStatus: (status) => status < 500,
+      validateStatus: (status) => status < 500, // Handle 4xx gracefully
     });
 
     if (response.status === 403 || response.status === 429) {
-      return res.status(response.status).json({ 
-        error: `Access Denied (${response.status}). The website is blocking automated access from this IP.`,
+      return res.status(200).json({ 
+        success: false,
+        error: `Website Blocked (${response.status})`,
+        message: "The website is blocking automated access from this server. Please try using a descriptive prompt instead of a URL.",
         isBlocked: true 
       });
     }
@@ -47,8 +50,22 @@ app.post("/api/scrape", async (req, res) => {
       throw new Error("Empty or invalid response data from target website.");
     }
 
+    // Check for "soft" blocks (200 OK but page says Access Denied)
+    const lowerData = response.data.toLowerCase();
+    if (lowerData.includes("access denied") && lowerData.length < 2000) {
+      return res.status(200).json({ 
+        success: false,
+        error: "Access Denied (Soft Block)",
+        message: "The website returned a security challenge page. We recommend describing the brand style instead.",
+        isBlocked: true 
+      });
+    }
+
     const $ = cheerio.load(response.data);
     
+    // --- MEMORY OPTIMIZATION: Clean the entire DOM once ---
+    $("script, style, noscript, iframe, svg, canvas, map, area, object, embed").remove();
+
     // Extract images including from picture tags
     const images: string[] = [];
     $("img, picture source").each((i, el) => {
@@ -63,27 +80,22 @@ app.post("/api/scrape", async (req, res) => {
       }
     });
 
-    const cleanText = (el: any) => {
-      if (!el || $(el).length === 0) return "";
-      const clone = $(el).clone();
-      clone.find("script, style, noscript, iframe, svg").remove();
-      return clone.text().replace(/\s+/g, " ").trim();
-    };
-
     const structure: any = {
-      title: $("title").text() || "Untitled Page",
+      success: true,
+      title: $("title").text().trim() || "Untitled Page",
       brandName: $("meta[property='og:site_name']").attr("content") || $("title").text().split(/[|-]/)[0].trim() || "Brand",
       images,
       sections: [],
     };
 
     // Identify common sections
-    if ($("nav, header").length > 0) {
+    const nav = $("nav, header").first();
+    if (nav.length > 0) {
       structure.sections.push({
         id: "navbar",
         type: "navbar",
         content: {
-          links: $("nav a, header a").map((i, el) => cleanText(el)).get().filter(t => t.length > 2).slice(0, 5)
+          links: nav.find("a").map((i, el) => $(el).text().trim()).get().filter(t => t.length > 2 && t.length < 20).slice(0, 5)
         }
       });
     }
@@ -95,8 +107,8 @@ app.post("/api/scrape", async (req, res) => {
         id: "hero_section",
         type: "hero_section",
         content: {
-          headline: cleanText(h1),
-          subheadline: cleanText(h1.nextAll("p, h2, h3").first()),
+          headline: h1.text().trim(),
+          subheadline: h1.nextAll("p, h2, h3").first().text().trim(),
           cta: $("a, button").filter((i, el) => {
             const text = $(el).text().toLowerCase();
             return text.includes("get") || text.includes("buy") || text.includes("start") || text.includes("shop") || text.includes("sign") || text.includes("try");
@@ -107,13 +119,14 @@ app.post("/api/scrape", async (req, res) => {
 
     // Other sections
     $("section, div[id*='section'], div[class*='section'], article").each((i, el) => {
-      const h2 = cleanText($(el).find("h2, h3").first());
-      const p = cleanText($(el).find("p").first());
-      const id = $(el).attr("id") || $(el).attr("class")?.split(" ")[0] || `section-${i}`;
+      const $el = $(el);
+      const h2 = $el.find("h2, h3").first().text().trim();
+      const p = $el.find("p").first().text().trim();
+      const id = $el.attr("id") || $el.attr("class")?.split(" ")[0] || `section-${i}`;
       
       if ((h2 && h2.length > 5) || (p && p.length > 20)) {
         let type = "content_section";
-        const text = $(el).text().toLowerCase();
+        const text = $el.text().toLowerCase();
         if (text.includes("feature")) type = "features_grid";
         if (text.includes("testim") || text.includes("review") || text.includes("what people say")) type = "social_proof_slider";
         if (text.includes("price") || text.includes("plan") || text.includes("cost")) type = "pricing_table";
@@ -134,30 +147,43 @@ app.post("/api/scrape", async (req, res) => {
         id: "footer",
         type: "footer",
         content: {
-          text: cleanText(footer).slice(0, 100)
+          text: footer.text().trim().slice(0, 100)
         }
+      });
+    }
+
+    // If we found basically nothing, count it as a soft block
+    if (structure.sections.length < 1 && images.length < 1) {
+      return res.status(200).json({
+        success: false,
+        message: "No content found. The website might be blocking automated tools."
       });
     }
 
     res.json(structure);
   } catch (error: any) {
     console.error("Scraping error:", error.message);
-    const status = error.response?.status || 500;
     const message = error.code === 'ERR_BAD_URL' ? "Invalid URL format." : 
-                    error.code === 'ECONNABORTED' ? "The target website took too long to respond (Vercel limit)." :
-                    error.message || "Failed to scrape landing page.";
-    res.status(status).json({ error: message, detail: error.code });
+                    error.code === 'ECONNABORTED' ? "The target website took too long to respond." :
+                    "We encountered an issue while accessing this URL.";
+    
+    // Always return 200 with success: false to the frontend to prevent 500 crashes
+    res.status(200).json({ 
+      success: false, 
+      error: "Scrape Failed",
+      message, 
+      detail: error.code 
+    });
   }
 });
 
 // Final error handler for Express
 app.use((err: any, req: any, res: any, next: any) => {
   console.error("Unhandled Error:", err);
-  res.status(500).json({ error: "Internal Server Error", message: err.message });
+  res.status(200).json({ success: false, error: "System Error", message: "An unexpected error occurred." });
 });
 
 async function startServer() {
-  // Vite middleware for development
   const isVercel = process.env.VERCEL === "true";
   const isProd = process.env.NODE_ENV === "production";
 
@@ -174,7 +200,6 @@ async function startServer() {
       console.error("Failed to load Vite middleware:", e);
     }
   } else if (!isVercel) {
-    // Only serve static files if NOT on Vercel (Vercel handles static files via vercel.json)
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
@@ -182,7 +207,6 @@ async function startServer() {
     });
   }
 
-  // Only start listener if not on Vercel
   if (!isVercel) {
     app.listen(PORT, "0.0.0.0", () => {
       console.log(`Server running on http://localhost:${PORT}`);
@@ -190,7 +214,6 @@ async function startServer() {
   }
 }
 
-// In standard Vercel environment, startServer might not be awaited before export
 startServer();
 
 export default app;

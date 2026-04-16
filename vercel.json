@@ -13,6 +13,11 @@
       }
     }
   ],
+  "functions": {
+    "server.ts": {
+      "regions": ["bom1"]
+    }
+  },
   "routes": [
     {
       "src": "/api/(.*)",

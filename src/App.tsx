@@ -79,6 +79,12 @@ export default function App() {
     try {
       // Step 1: Structural Analysis
       const scrapeRes = await axios.post("/api/scrape", { url: lpUrl });
+      
+      // Validation: Check if we actually got a real page or a bot-blocked skeleton
+      if (!scrapeRes.data.sections || scrapeRes.data.sections.length < 2) {
+        throw new Error("This website is blocking our automated access. Please try a different URL or descriptive text instead.");
+      }
+
       setPageStructure(scrapeRes.data);
       
       await new Promise(r => setTimeout(r, 1000)); // Visual delay
