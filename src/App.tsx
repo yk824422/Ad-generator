@@ -25,7 +25,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { analyzeAd, generatePersonalizedCode, AdAnalysis, PageStructure, PersonalizedCode } from "./services/gemini";
+import { analyzeAd, generatePersonalizedCode, AdAnalysis, PageStructure, PersonalizedCode } from "./services/openai";
 import axios from "axios";
 
 export default function App() {
@@ -333,13 +333,13 @@ export default function App() {
                               <div className="space-y-2">
                                 <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">Visual Audit</p>
                                 <div className="flex items-center gap-2">
-                                  {adAnalysis.designSystem.colors.map((c, i) => (
+                                  {adAnalysis.designSystem?.colors?.map((c, i) => (
                                     <div key={i} className="w-8 h-8 rounded-full border border-gray-200 shadow-sm" style={{ backgroundColor: c }} title={c} />
                                   ))}
                                 </div>
                                 <div className="flex gap-2 mt-2">
-                                  <Badge variant="secondary" className="bg-purple-50 text-purple-600 border-purple-100">{adAnalysis.designSystem.fontStyle}</Badge>
-                                  <Badge variant="secondary" className="bg-purple-50 text-purple-600 border-purple-100">{adAnalysis.designSystem.vibe}</Badge>
+                                  <Badge variant="secondary" className="bg-purple-50 text-purple-600 border-purple-100">{adAnalysis.designSystem?.fontStyle}</Badge>
+                                  <Badge variant="secondary" className="bg-purple-50 text-purple-600 border-purple-100">{adAnalysis.designSystem?.vibe}</Badge>
                                 </div>
                               </div>
                             </div>
@@ -456,10 +456,10 @@ export default function App() {
                                 <div 
                                   className="h-[500px] overflow-y-auto"
                                   style={{ 
-                                    fontFamily: adAnalysis?.designSystem.fontStyle === "Serif" ? "serif" : "sans-serif",
-                                    "--primary-color": adAnalysis?.designSystem.colors[0] || "#2563eb",
-                                    "--secondary-color": adAnalysis?.designSystem.colors[1] || "#3b82f6",
-                                    "--accent-color": adAnalysis?.designSystem.colors[2] || "#60a5fa"
+                                    fontFamily: adAnalysis?.designSystem?.fontStyle === "Serif" ? "serif" : "sans-serif",
+                                    "--primary-color": adAnalysis?.designSystem?.colors?.[0] || "#2563eb",
+                                    "--secondary-color": adAnalysis?.designSystem?.colors?.[1] || "#3b82f6",
+                                    "--accent-color": adAnalysis?.designSystem?.colors?.[2] || "#60a5fa"
                                   } as any}
                                 >
                                   {/* Dynamic Preview Mockup */}

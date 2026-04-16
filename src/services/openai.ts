@@ -1,6 +1,9 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import OpenAI from "openai";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY || "",
+  dangerouslyAllowBrowser: true, // Required for client-side usage in Vite
+});
 
 export interface AdAnalysis {
   headline: string;
@@ -47,47 +50,62 @@ IMPORTANT: Do not include any HTML tags, markdown formatting, or code blocks in 
 
 Return the result in structured JSON format.`;
 
-  const contents: any[] = [{ text: prompt }];
+  const messages: any[] = [
+    {
+      role: "user",
+      content: [
+        { type: "text", text: prompt },
+      ],
+    },
+  ];
+
   if (input.image) {
-    contents.push({
-      inlineData: {
-        mimeType: "image/png",
-        data: input.image.split(",")[1] || input.image,
+    messages[0].content.push({
+      type: "image_url",
+      image_url: {
+        url: input.image, // Supports base64 data URLs directly
       },
     });
   } else if (input.text) {
-    contents.push({ text: `Ad Content: ${input.text}` });
+    messages[0].content.push({ type: "text", text: `Ad Content: ${input.text}` });
   }
 
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
-    contents: { parts: contents },
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          headline: { type: Type.STRING },
-          offer: { type: Type.STRING },
-          targetPersona: { type: Type.STRING },
-          emotionalTone: { type: Type.STRING },
-          cta: { type: Type.STRING },
-          designSystem: {
-            type: Type.OBJECT,
-            properties: {
-              colors: { type: Type.ARRAY, items: { type: Type.STRING } },
-              fontStyle: { type: Type.STRING, enum: ["Serif", "Sans-serif"] },
-              vibe: { type: Type.STRING },
-            },
-            required: ["colors", "fontStyle", "vibe"],
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o",
+    messages,
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "ad_analysis",
+        strict: true,
+        schema: {
+          type: "object",
+          properties: {
+            headline: { type: "string" },
+            offer: { type: "string" },
+            targetPersona: { type: "string" },
+            emotionalTone: { type: "string" },
+            cta: { type: "string" },
+            designSystem: {
+              type: "object",
+              properties: {
+                colors: { type: "array", items: { type: "string" } },
+                fontStyle: { type: "string", enum: ["Serif", "Sans-serif"] },
+                vibe: { type: "string" }
+              },
+              required: ["colors", "fontStyle", "vibe"],
+              additionalProperties: false
+            }
           },
-        },
-        required: ["headline", "offer", "targetPersona", "emotionalTone", "cta", "designSystem"],
-      },
+          required: ["headline", "offer", "targetPersona", "emotionalTone", "cta", "designSystem"],
+          additionalProperties: false
+        }
+      }
     },
   });
 
-  return JSON.parse(response.text || "{}");
+  const content = response.choices[0].message.content || "{}";
+  return JSON.parse(content);
 }
 
 export async function generatePersonalizedCode(adData: AdAnalysis, pageStructure: PageStructure): Promise<PersonalizedCode> {
@@ -116,21 +134,30 @@ Output:
 
 Return in JSON format with 'code' and 'explanation' fields.`;
 
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
-    contents: prompt,
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          code: { type: Type.STRING },
-          explanation: { type: Type.STRING },
-        },
-        required: ["code", "explanation"],
-      },
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o",
+    messages: [
+      { role: "system", content: "You are a specialized personalizer assistant. Always output JSON." },
+      { role: "user", content: prompt }
+    ],
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "personalized_code",
+        strict: true,
+        schema: {
+          type: "object",
+          properties: {
+            code: { type: "string" },
+            explanation: { type: "string" }
+          },
+          required: ["code", "explanation"],
+          additionalProperties: false
+        }
+      }
     },
   });
 
-  return JSON.parse(response.text || "{}");
+  const content = response.choices[0].message.content || "{}";
+  return JSON.parse(content);
 }
