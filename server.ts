@@ -1,5 +1,4 @@
 import express from "express";
-import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
 import axios from "axios";
@@ -9,7 +8,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json());
 
@@ -26,20 +25,26 @@ app.post("/api/scrape", async (req, res) => {
     
     const response = await axios.get(url, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
       },
-      timeout: 8000, // Lowered for Vercel (10s limit)
+      timeout: 9000, // Stay under Vercel's 10s limit
       maxRedirects: 5,
       validateStatus: (status) => status < 500,
     });
 
-    if (response.status === 403) {
-      return res.status(403).json({ 
-        error: "Access Forbidden (403). The website is blocking automated access.",
+    if (response.status === 403 || response.status === 429) {
+      return res.status(response.status).json({ 
+        error: `Access Denied (${response.status}). The website is blocking automated access from this IP.`,
         isBlocked: true 
       });
+    }
+
+    if (!response.data || typeof response.data !== "string") {
+      throw new Error("Empty or invalid response data from target website.");
     }
 
     const $ = cheerio.load(response.data);
@@ -61,7 +66,7 @@ app.post("/api/scrape", async (req, res) => {
     const cleanText = (el: any) => {
       if (!el || $(el).length === 0) return "";
       const clone = $(el).clone();
-      clone.find("script, style, noscript").remove();
+      clone.find("script, style, noscript, iframe, svg").remove();
       return clone.text().replace(/\s+/g, " ").trim();
     };
 
@@ -78,7 +83,7 @@ app.post("/api/scrape", async (req, res) => {
         id: "navbar",
         type: "navbar",
         content: {
-          links: $("nav a, header a").map((i, el) => cleanText(el)).get().filter(t => t.length > 0).slice(0, 5)
+          links: $("nav a, header a").map((i, el) => cleanText(el)).get().filter(t => t.length > 2).slice(0, 5)
         }
       });
     }
@@ -91,11 +96,11 @@ app.post("/api/scrape", async (req, res) => {
         type: "hero_section",
         content: {
           headline: cleanText(h1),
-          subheadline: cleanText(h1.nextAll("p, h2").first()),
+          subheadline: cleanText(h1.nextAll("p, h2, h3").first()),
           cta: $("a, button").filter((i, el) => {
             const text = $(el).text().toLowerCase();
-            return text.includes("get") || text.includes("buy") || text.includes("start") || text.includes("shop") || text.includes("sign");
-          }).first().text().trim()
+            return text.includes("get") || text.includes("buy") || text.includes("start") || text.includes("shop") || text.includes("sign") || text.includes("try");
+          }).first().text().trim() || "Get Started"
         }
       });
     }
@@ -104,18 +109,18 @@ app.post("/api/scrape", async (req, res) => {
     $("section, div[id*='section'], div[class*='section'], article").each((i, el) => {
       const h2 = cleanText($(el).find("h2, h3").first());
       const p = cleanText($(el).find("p").first());
-      const id = $(el).attr("id") || $(el).attr("class") || `section-${i}`;
+      const id = $(el).attr("id") || $(el).attr("class")?.split(" ")[0] || `section-${i}`;
       
-      if (h2 || p) {
+      if ((h2 && h2.length > 5) || (p && p.length > 20)) {
         let type = "content_section";
         const text = $(el).text().toLowerCase();
         if (text.includes("feature")) type = "features_grid";
-        if (text.includes("testim") || text.includes("review")) type = "social_proof_slider";
-        if (text.includes("price") || text.includes("plan")) type = "pricing_table";
-        if (text.includes("faq")) type = "faq_section";
+        if (text.includes("testim") || text.includes("review") || text.includes("what people say")) type = "social_proof_slider";
+        if (text.includes("price") || text.includes("plan") || text.includes("cost")) type = "pricing_table";
+        if (text.includes("faq") || text.includes("question")) type = "faq_section";
 
         structure.sections.push({
-          id: id.split(" ")[0],
+          id,
           type,
           content: { title: h2, text: p }
         });
@@ -123,12 +128,13 @@ app.post("/api/scrape", async (req, res) => {
     });
 
     // Footer
-    if ($("footer").length > 0) {
+    const footer = $("footer").first();
+    if (footer.length > 0) {
       structure.sections.push({
         id: "footer",
         type: "footer",
         content: {
-          text: cleanText($("footer")).slice(0, 100)
+          text: cleanText(footer).slice(0, 100)
         }
       });
     }
@@ -138,21 +144,37 @@ app.post("/api/scrape", async (req, res) => {
     console.error("Scraping error:", error.message);
     const status = error.response?.status || 500;
     const message = error.code === 'ERR_BAD_URL' ? "Invalid URL format." : 
-                    error.code === 'ECONNABORTED' ? "Request timed out (Vercel limit)." :
-                    "Failed to scrape landing page. The site might be blocking access or is offline.";
-    res.status(status).json({ error: message });
+                    error.code === 'ECONNABORTED' ? "The target website took too long to respond (Vercel limit)." :
+                    error.message || "Failed to scrape landing page.";
+    res.status(status).json({ error: message, detail: error.code });
   }
+});
+
+// Final error handler for Express
+app.use((err: any, req: any, res: any, next: any) => {
+  console.error("Unhandled Error:", err);
+  res.status(500).json({ error: "Internal Server Error", message: err.message });
 });
 
 async function startServer() {
   // Vite middleware for development
-  if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
+  const isVercel = process.env.VERCEL === "true";
+  const isProd = process.env.NODE_ENV === "production";
+
+  if (!isProd && !isVercel) {
+    try {
+      const { createServer: createViteServer } = await import("vite");
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+      console.log("Vite development middleware loaded.");
+    } catch (e) {
+      console.error("Failed to load Vite middleware:", e);
+    }
+  } else if (!isVercel) {
+    // Only serve static files if NOT on Vercel (Vercel handles static files via vercel.json)
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
@@ -160,13 +182,15 @@ async function startServer() {
     });
   }
 
-  if (process.env.NODE_ENV !== "production" || !process.env.VERCEL) {
+  // Only start listener if not on Vercel
+  if (!isVercel) {
     app.listen(PORT, "0.0.0.0", () => {
       console.log(`Server running on http://localhost:${PORT}`);
     });
   }
 }
 
+// In standard Vercel environment, startServer might not be awaited before export
 startServer();
 
 export default app;
