@@ -60,7 +60,7 @@ Return the result in structured JSON format.`;
   }
 
   const response = await ai.models.generateContent({
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-2.5-flash",
     contents: { parts: contents },
     config: {
       responseMimeType: "application/json",
@@ -117,7 +117,7 @@ Output:
 Return in JSON format with 'code' and 'explanation' fields.`;
 
   const response = await ai.models.generateContent({
-    model: "gemini-3.1-pro-preview",
+    model: "gemini-2.5-flash",
     contents: prompt,
     config: {
       responseMimeType: "application/json",
